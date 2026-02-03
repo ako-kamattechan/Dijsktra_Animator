@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8" />
+  <title>Algoritmo de Dijkstra / Editor</title>
+  <link rel="stylesheet" href="theme.css" />
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="stage-wrap">
+    <svg id="stage" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet">
+      <g id="edges"></g>
+      <g id="edge-labels"></g>
+      <g id="nodes"></g>
+      <g id="node-labels"></g>
+    </svg>
+  </div>
+
+  <aside id="sidebar" aria-hidden="false">
+    <button id="toggleSidebarBtn" style="margin-bottom:10px;">Ocultar panel</button>
+    <button id="focusBtn" class="secondary" style="margin-left:8px;">Enfocar tabla</button>
+
+    <h2>Algoritmo de Dijkstra</h2>
+
+    <div class="controls">
+      <select id="sourceSelect" title="Origen"></select>
+      <button id="resetBtn">Reiniciar</button>
+      <button id="playBtn" class="primary">Animar</button>
+      <button id="stopBtn">Detener</button>
+    </div>
+
+    <div class="controls">
+      <label for="speedSelect">Velocidad:</label>
+      <select id="speedSelect">
+        <option value="1200">Lenta</option>
+        <option value="600" selected>Media</option>
+        <option value="300">Rápida</option>
+      </select>
+    </div>
+
+    <div class="controls">
+      <button id="copyPresetBtn">Copiar</button>
+      <button id="loadPresetBtn">Cargar</button>
+    </div>
+
+    <div class="controls">
+      <label style="color:var(--accent); display:flex; gap:6px; align-items:center;">
+        <input type="checkbox" id="loopToggle" style="accent-color:var(--accent);" />
+        Repetir
+      </label>
+    </div>
+
+    <button class="help-btn" id="helpBtn">?</button>
+
+    <textarea id="presetBox" class="preset" placeholder='Pegue/Cargue Un Preset JSON'></textarea>
+
+    <p class="hint">
+      Edición: clic para crear nodo · Ctrl+arrastrar para mover · Clic y arrastre para arista ·
+      Doble clic en nodo/arista para editar · Shift+clic para eliminar.
+    </p>
+
+    <h2 style="margin-top:14px">Tabla de distancias</h2>
+    <table>
+      <thead>
+      <tr><th>Nodo</th><th>Distancia</th><th>Camino</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </aside>
+
+  <div id="sidebar-resizer"></div>
+
+  <div class="badge">ESC → regresar</div>
+</div>
+
+
+<div class="help-overlay" id="helpOverlay" aria-hidden="true">
+  <div class="help-card">
+    <img src="ed.png" alt="Ayuda">
+  </div>
+</div>
+
+
+<script src="utils.js"></script>
+
+<script>
+
+  /* UI Controller */
+  const UI = (() => {
+
+    const root = document.documentElement;
+    const sidebar = document.getElementById("sidebar");
+    const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+    const focusBtn = document.getElementById("focusBtn");
+
+    let sidebarVisible = true;
+
+    /* Sidebar visibility */
+    function showSidebar() {
+      sidebarVisible = true;
+      sidebar.style.display = "block";
+      root.style.setProperty("--drawer-width","420px");
+      toggleSidebarBtn.textContent = "Ocultar panel";
+    }
+
+    function hideSidebar() {
+      sidebarVisible = false;
+      sidebar.style.display = "none";
+      root.style.setProperty("--drawer-width","0px");
+      toggleSidebarBtn.textContent = "Mostrar panel";
+    }
+
+    toggleSidebarBtn.addEventListener("click", () => {
+      sidebarVisible ? hideSidebar() : showSidebar();
+    });
+
+
+    /* Focus Mode (Table Only + SVG ) */
+    function enterFocus() {
+      Utils.state.focusMode = true;
+      document.body.classList.add("focus-mode");
+      showSidebar(); // needed to display table
+      focusBtn.textContent = "Salir enfoque";
+    }
+
+    function exitFocus() {
+      Utils.state.focusMode = false;
+      document.body.classList.remove("focus-mode");
+      focusBtn.textContent = "Enfocar tabla";
+    }
+
+    focusBtn.addEventListener("click", () => {
+      Utils.state.focusMode ? exitFocus() : enterFocus();
+    });
+
+
+    /* Help Overlay setup */
+    function setupHelpOverlay() {
+      const btn = document.getElementById("helpBtn");
+      const overlay = document.getElementById("helpOverlay");
+      const img = overlay.querySelector("img");
+
+      btn.addEventListener("click", () => {
+        overlay.classList.add("active");
+        overlay.setAttribute("aria-hidden","false");
+        Utils.state.modalOpen = true;
+      });
+
+      overlay.addEventListener("mousedown",(e)=>{
+        if (e.target === overlay) closeHelp();
+      });
+
+      function closeHelp() {
+        overlay.classList.remove("active");
+        overlay.setAttribute("aria-hidden","true");
+        Utils.state.modalOpen = false;
+        img.style.transform = "scale(1)";
+      }
+
+      overlay.addEventListener("mousemove",(e)=>{
+        if (!Utils.state.modalOpen) return;
+        const r = overlay.getBoundingClientRect();
+        const nx = (e.clientX - r.width/2) / r.width;
+        const ny = (e.clientY - r.height/2) / r.height;
+        img.style.transform =
+                `translate(${nx*22}px,${ny*22}px) rotateX(${ny*7}deg) rotateY(${-nx*7}deg) scale(1.03)`;
+      });
+
+      overlay.addEventListener("mouseleave",()=>{
+        if (!Utils.state.modalOpen) return;
+        img.style.transform = "scale(1)";
+      });
+    }
+
+    setupHelpOverlay();
+
+
+    /* Global ESC Handler */
+    window.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+
+      if (Utils.state.modalOpen) {
+        document.getElementById("helpOverlay").classList.remove("active");
+        Utils.state.modalOpen = false;
+        return;
+      }
+
+      if (Utils.state.focusMode) {
+        exitFocus();
+        return;
+      }
+
+      if (!sidebarVisible) {
+        showSidebar();
+        return;
+      }
+    });
+
+    return {
+      showSidebar,
+      hideSidebar,
+      enterFocus,
+      exitFocus
+    };
+
+  })();
+</script>
+
+
+<script>
+
+  (function() {
+
+    const $ = s => document.querySelector(s);
+    const stageEl = $("#stage");
+
+    Utils.setState({
+      svg: {
+        root: stageEl,
+        gEdges: $("#edges"),
+        gEdgeLabels: $("#edge-labels"),
+        gNodes: $("#nodes"),
+        gNodeLabels: $("#node-labels"),
+      },
+      tableEl: $("#rows"),
+      loop: false
+    });
+
+    Utils.attachHoverHandlers(stageEl);
+
+    /* Short alias */
+    const S = Utils.state;
+
+    const sourceSelect = $("#sourceSelect");
+    const resetBtn     = $("#resetBtn");
+    const playBtn      = $("#playBtn");
+    const stopBtn      = $("#stopBtn");
+
+    const savePresetBtn = $("#savePresetBtn");
+    const copyPresetBtn = $("#copyPresetBtn");
+    const loadPresetBtn = $("#loadPresetBtn");
+    const presetBox     = $("#presetBox");
+
+    const speedSelect = $("#speedSelect");
+    let speed = Number(speedSelect.value);
+    speedSelect.onchange = () => speed = Number(speedSelect.value);
+
+    const loopToggle = document.getElementById("loopToggle");
+    loopToggle.onchange = () => S.loop = loopToggle.checked;
+
+
+    /* Controls */
+    playBtn.onclick = () => {
+      S.loop = loopToggle.checked;
+      if (!S.animating) Utils.animateDijkstra(speed);
+    };
+
+    stopBtn.onclick = () => {
+      S.loop = false;
+      S.animating = false;
+      if (S.cancelAnim) clearTimeout(S.cancelAnim);
+    };
+
+
+    /* Options */
+    function renderSourceOptions() {
+      sourceSelect.innerHTML = "";
+      const ph = document.createElement("option");
+      ph.value = ""; ph.textContent = "— Origen —";
+      sourceSelect.appendChild(ph);
+
+      (S.nodes || []).forEach(n => {
+        const o = document.createElement("option");
+        o.value = n.id;
+        o.textContent = n.id;
+        if (n.id === S.sourceId) o.selected = true;
+        sourceSelect.appendChild(o);
+      });
+    }
+
+    window.addEventListener("graph-changed", renderSourceOptions);
+
+    sourceSelect.onchange = () => {
+      S.sourceId = sourceSelect.value || null;
+      refresh();
+    };
+
+
+    /* Presets */
+    function exportPreset() {
+      return JSON.stringify({
+        nodes: S.nodes || [],
+        edges: S.edges || [],
+        sourceId: S.sourceId || null
+      }, null, 2);
+    }
+
+    function importPreset(txt) {
+      const obj = JSON.parse(txt);
+      S.nodes = (obj.nodes||[]).map(n => ({ id:String(n.id), x:+n.x, y:+n.y }));
+      S.edges = (obj.edges||[]).map(e => ({ a:String(e.a), b:String(e.b), w:+e.w }));
+      S.sourceId = obj.sourceId ? String(obj.sourceId) : (S.nodes[0]?.id || null);
+
+      Utils.circleLayoutIfMissing(S.nodes, 1600, 900, 320);
+      refresh();
+    }
+
+    copyPresetBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(exportPreset());
+        alert("Copiado.");
+      } catch {
+        alert("No se pudo copiar.");
+      }
+    };
+
+    loadPresetBtn.onclick = () => {
+      try { importPreset(presetBox.value); }
+      catch { alert("Preset inválido."); }
+    };
+
+
+    /* Reset */
+    resetBtn.onclick = () => {
+      S.nodes = [];
+      S.edges = [];
+      S.sourceId = null;
+      Utils.state.nextId = 0;
+      Utils.recomputeAndRender();
+      window.dispatchEvent(new CustomEvent("graph-changed"));
+    };
+
+
+    /* Refresh UI */
+    function refresh() {
+      const { dist, prev } = Utils.runDijkstra(S.nodes, S.edges, S.sourceId);
+      Utils.drawGraph(dist, prev);
+      Utils.renderTable(dist, prev);
+      renderSourceOptions();
+    }
+
+    refresh();
+  })();
+</script>
+
+<script>
+  /* Sidebar Resizer (restored) */
+  (() => {
+    const resizer = document.getElementById('sidebar-resizer');
+    const root = document.documentElement;
+    let startX = 0, startWidth = 0, dragging = false;
+
+    if (!resizer) return;
+
+    resizer.addEventListener('mousedown', e => {
+      dragging = true;
+      startX = e.clientX;
+      const styles = getComputedStyle(root);
+      startWidth = parseFloat(styles.getPropertyValue('--drawer-width'));
+      resizer.classList.add('active');
+      document.body.style.cursor = 'ew-resize';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const dx = startX - e.clientX;
+      let newW = Math.min(800, Math.max(260, startWidth + dx));
+      root.style.setProperty('--drawer-width', newW + 'px');
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('active');
+      document.body.style.cursor = 'default';
+    });
+  })();
+</script>
+
+<script>
+
+
+  /* Handshake System(Wait until iframe is Ready) */
+  /* Message Handler[iframe Ready -> Send Message -> Handshake ] */
+  window.addEventListener("message", (ev) => {
+    const msg = ev.data;
+
+    if (!msg || !msg.type)
+      return;
+
+
+    switch (msg.type) {
+
+      case "PING_IFRAME": {
+        window.parent.postMessage({ type: "IFRAME_READY" }, "*");
+        break;
+      }
+
+      case "INIT_GRAPH": {
+        const p = msg.payload;
+        if (!p) return;
+
+        Utils.state.nodes = (p.nodes || []).map(n => ({
+          id: n.id,
+          x: n.x,
+          y: n.y
+        }));
+
+        Utils.state.edges = (p.edges || []).map(e => ({
+          a: e.a,
+          b: e.b,
+          w: e.w
+        }));
+
+        Utils.state.sourceId = p.sourceId || null;
+        Utils.state.loop = !!p.loop;
+
+        Utils.recomputeAndRender();
+        window.dispatchEvent(new CustomEvent("graph-changed"));
+        break;
+      }
+
+      case "HIDE_UI": {
+        document.getElementById("sidebar").style.display = "none";
+        document.documentElement.style.setProperty("--drawer-width", "0px");
+        break;
+      }
+
+      case "FOCUS_MODE": {
+        if (!Utils.state.focusMode) {
+          Utils.state.focusMode = true;
+          document.body.classList.add("focus-mode");
+        }
+        break;
+      }
+
+      case "START": {
+        if (!Utils.state.animating) {
+          Utils.state.loop = true;
+          Utils.animateDijkstra(600);
+        }
+        break;
+      }
+
+      case "STOP": {
+        Utils.state.loop = false;
+        Utils.state.animating = false;
+        if (Utils.state.cancelAnim) clearTimeout(Utils.state.cancelAnim);
+        break;
+      }
+    }
+  });
+</script>
+
+
+
+<script src="editor.js"></script>
+
+</body>
+</html>
