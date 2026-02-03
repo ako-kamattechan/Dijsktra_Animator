@@ -1,0 +1,9 @@
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# IDE directories
+.idea/
+.vscode/
+*.swp
+*.iml
